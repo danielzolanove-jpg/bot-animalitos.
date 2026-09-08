@@ -2,8 +2,11 @@ name: Monitoreo de Resultados
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Ejecuta cada 30 minutos
-  workflow_dispatch:        # Permite probarlo manualmente
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   check-website:
@@ -31,6 +34,5 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git add ultimo_estado.txt || true
-        git commit -m "Actualizar ultimo estado" || true
+        git diff --quiet && git diff --staged --quiet || git commit -m "Actualizar ultimo estado"
         git push || true
-        
