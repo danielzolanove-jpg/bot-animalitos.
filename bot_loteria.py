@@ -2,7 +2,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 
-BOT_TOKEN = "8731523468:AAGGDKWD93v6DU6rdG_IucdDxLBt710he98"
+BOT_TOKEN = "8349151512:AAHH2W4ljSn5a0r66QMMQFTSEsNFNFAAdQU"
 CHAT_ID = "@Opdorada"
 ARCHIVO_ESTADO = "ultimo_estado.txt"
 
