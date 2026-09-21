@@ -1,40 +1,57 @@
 import os
-import requests
+import re
+import time
+import unicodedata
+import cloudscraper
 from bs4 import BeautifulSoup
 
-BOT_TOKEN = "8349151512:AAHH2W4ljSn5a0r66QMMQFTSEsNFNFAAdQU"
-CHAT_ID = "@Opdorada"
-ARCHIVO_ESTADO = "ultimo_estado.txt"
+# TOKEN Y CANAL DE TELEGRAM
+BOT_TOKEN = "8349151512:AAHH2W4ljSn5aOr66QMMQFTSEsNFNFAAdQU"
+CHAT_ID = "@opdoradaresultados"
+HISTORIAL_FILE = "enviados.txt"
+URL_WEB = "https://loteriadehoy.com/"
 
-# Fuentes oficiales a monitorear
-FUENTES = {
-    "Lotto Activo": "https://www.lottoactivo.com/resultados/animalitos/",
-    "La Granjita": "https://lagranjita.com/",
-    "Guácharo Activo": "https://nitter.net/guacharoactivo"  # Espejo Nitter para Twitter/X
+MAPEO_LOTERIAS = {
+    "LOTTO ACTIVO": "LOTTO ACTIVO",
+    "LA GRANJITA": "LA GRANJITA",
+    "SELVA PLUS": "SELVA PLUS",
+    "GUACHARO ACTIVO": "GUACHARO ACTIVO",
+    "GUACHARO": "GUACHARO ACTIVO",
+    "EL GUACHARITO MILLONARIO": "EL GUACHARITO MILLONARIO",
+    "LOTTO INTERNACIONAL": "LOTTO INTERNACIONAL",
+    "LA RUCA": "LA RUCA",
+    "TRIO ACTIVO": "TRIO ACTIVO"
 }
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
+EMOJIS_ANIMALES = {
+    "DELFIN": "🐬", "BALLENA": "🐳", "CARNERO": "🐏", "TORO": "🐂", "CIEMPIES": "🐛",
+    "ALACRAN": "🦂", "LEON": "🦁", "RANA": "🐸", "PERICO": "🦜", "TIGRE": "🐯",
+    "GATO": "🐱", "CABALLO": "🐴", "MONO": "🐒", "PALOMA": "🕊️", "ZORRO": "🦊",
+    "OSO": "🐻", "PAVOREAL": "🦚", "AGUILA": "🦅", "CHIVO": "🐐", "PERRO": "🐶",
+    "ZAMURO": "🦅", "ELEFANTE": "🐘", "CAIMAN": "🐊", "GALLO": "🐓", "IGUANA": "🦎",
+    "CAMELLO": "🐫", "CEBRA": "🦓", "PORCO": "🐖", "TURPIAL": "🐤", "CHIGUIRE": "🦙",
+    "VENADO": "🦌", "CULEBRA": "🐍", "TUCAN": "🦜", "TIBURON": "🦈", "PUERCOESPIN": "🦔",
+    "GALLINA": "🐔"
 }
 
-def consultar_sitio(url):
-    try:
-        session = requests.Session()
-        res = session.get(url, headers=HEADERS, timeout=20)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            contenedor = soup.find('main') or soup.find('article') or soup.find('body')
-            if contenedor:
-                return contenedor.get_text(separator="\n", strip=True)[:3000]
-        else:
-            print(f"Error HTTP {res.status_code} en {url}")
-    except Exception as e:
-        print(f"Error consultando {url}: {e}")
-    return ""
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+    texto = unicodedata.normalize('NFD', texto)
+    texto = ''.join(c for c in texto if unicodedata.category(c) != 'Mn')
+    return texto.upper().strip()
 
-def enviar_telegram(mensaje):
+def cargar_historial():
+    if not os.path.exists(HISTORIAL_FILE):
+        return set()
+    with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
+        return set(line.strip() for line in f if line.strip())
+
+def guardar_historial(clave):
+    with open(HISTORIAL_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{clave}\n")
+
+def enviar_telegram(scraper, mensaje):
     url_api = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -42,42 +59,88 @@ def enviar_telegram(mensaje):
         "parse_mode": "HTML"
     }
     try:
-        res = requests.post(url_api, data=payload)
-        if res.status_code == 200:
-            print("Notificación enviada a Telegram.")
-        else:
-            print(f"Error Telegram: {res.text}")
+        # Timeout agresivo de 5s para envío ultra rápido
+        res = scraper.post(url_api, json=payload, timeout=5)
+        return res.status_code == 200
     except Exception as e:
-        print(f"Error de conexión Telegram: {e}")
+        print(f"Error de conexión con Telegram: {e}")
+        return False
+
+def extraer_resultados(scraper):
+    try:
+        # Petición directa con timeout reducido a 8s para acelerar respuesta
+        response = scraper.get(URL_WEB, timeout=8)
+        response.encoding = 'utf-8'
+        if response.status_code != 200:
+            print(f"📌 Web respondió status: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"📌 Error de conexión con la web: {e}")
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    resultados = []
+
+    bloques = soup.find_all(["div", "article", "section", "tr"])
+
+    for bloque in bloques:
+        texto = bloque.get_text(separator=" ", strip=True)
+        if not texto or len(texto) > 250:
+            continue
+
+        texto_norm = normalizar_texto(texto)
+
+        for clave_loteria, nombre_oficial in MAPEO_LOTERIAS.items():
+            if clave_loteria in texto_norm:
+                hora_match = re.search(r'\b(0?[1-9]|1[0-2]):[0-5][0-9]\s*(AM|PM)\b', texto_norm)
+                num_animal_match = re.search(r'\b(\d{1,3})\s*[-–—]?\s*([A-Z]{3,})\b', texto_norm)
+
+                if hora_match and num_animal_match:
+                    hora = hora_match.group(0)
+                    num = num_animal_match.group(1)
+                    animal = num_animal_match.group(2)
+
+                    if animal in ["RESULTADOS", "LOTERIA", "HOY", "ANIMALITOS", "DATOS", "INICIO"]:
+                        continue
+
+                    clave_historial = f"{nombre_oficial}_{hora}_{num}_{animal}"
+                    resultados.append({
+                        "clave": clave_historial,
+                        "loteria": nombre_oficial,
+                        "hora": hora,
+                        "num": num,
+                        "animal": animal
+                    })
+
+    return resultados
 
 if __name__ == "__main__":
-    estado_actual_partes = []
+    hora_ejecucion = time.strftime("%H:%M:%S")
+    print(f"🤖 [{hora_ejecucion}] Escaneando loterías en tiempo real...")
+
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+    historial = cargar_historial()
+    resultados = extraer_resultados(scraper)
+
+    resultados_unicos = {r["clave"]: r for r in resultados}.values()
+
+    enviados_count = 0
+    for r in resultados_unicos:
+        if r["clave"] not in historial:
+            emoji = EMOJIS_ANIMALES.get(r["animal"], "🎰")
+            mensaje = (
+                f"🎰 <b>{r['loteria']}</b>\n"
+                f"⏰ Hora: <b>{r['hora']}</b>\n"
+                f"💥 Resultado: <b>{r['num']} - {r['animal']}</b> {emoji}"
+            )
+
+            if enviar_telegram(scraper, mensaje):
+                print(f"⚡ [PUBLICACIÓN INMEDIATA]: {r['loteria']} | {r['hora']} -> {r['num']} - {r['animal']}")
+                guardar_historial(r["clave"])
+                historial.add(r["clave"])
+                enviados_count += 1
+                time.sleep(0.5) # Pausa mínima para acelerar ráfagas de sorteos
+
+    if enviados_count == 0:
+        print(f"🟢 [{hora_ejecucion}] Bot operativo. Sin resultados nuevos publicados a esta hora.")
     
-    # Consultar cada una de las 3 loterías
-    for nombre, url in FUENTES.items():
-        contenido = consultar_sitio(url)
-        estado_actual_partes.append(f"--- {nombre} ---\n{contenido}")
-
-    estado_actual_completo = "\n".join(estado_actual_partes)
-
-    estado_anterior = ""
-    if os.path.exists(ARCHIVO_ESTADO):
-        with open(ARCHIVO_ESTADO, "r", encoding="utf-8") as f:
-            estado_anterior = f.read()
-
-    # Comparar si hubo cambios en alguna de las fuentes
-    if estado_actual_completo and estado_actual_completo != estado_anterior:
-        mensaje = (
-            f"🎰 <b>¡NUEVOS RESULTADOS DETECTADOS!</b>\n\n"
-            f"Se han registrado novedades en las páginas oficiales:\n\n"
-            f"🔹 <b>Lotto Activo:</b> https://www.lottoactivo.com/resultados/animalitos/\n"
-            f"🔹 <b>La Granjita:</b> https://lagranjita.com/\n"
-            f"🔹 <b>Guácharo Activo:</b> https://x.com/guacharoactivo\n\n"
-            f"📲 <i>Consulta el canal para ver el boletín de sorteos.</i>"
-        )
-        enviar_telegram(mensaje)
-        
-        with open(ARCHIVO_ESTADO, "w", encoding="utf-8") as f:
-            f.write(estado_actual_completo)
-    else:
-        print("Sin cambios en las loterías oficiales.")
